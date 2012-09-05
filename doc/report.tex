@@ -1,0 +1,172 @@
+% Very simple template for lab reports. Most common packages are already included.
+\documentclass[a4paper, 11pt]{article}
+\usepackage[utf8]{inputenc} % Change according your file encoding
+\usepackage{graphicx}
+\usepackage{url}
+\usepackage{listings}
+\usepackage{float}
+%----------------------Definition pour listings------------------------
+\lstset{ %
+basicstyle=\footnotesize,       % the size of the fonts that are used for the code
+numbers=left,                   % where to put the line-numbers
+numberstyle=\footnotesize,      % the size of the fonts that are used for the line-numbers
+stepnumber=1,                   % the step between two line-numbers. If it's 1 each line 
+                                % will be numbered
+numbersep=5pt,                  % how far the line-numbers are from the code
+%backgroundcolor=\color{white},  % choose the background color. You must add \usepackage{color}
+showspaces=false,               % show spaces adding particular underscores
+showstringspaces=false,         % underline spaces within strings
+showtabs=false,                 % show tabs within strings adding particular underscores
+frame=single,	                % adds a frame around the code
+tabsize=2,	                	% sets default tabsize to 2 spaces
+captionpos=b,                   % sets the caption-position to bottom
+breaklines=true,                % sets automatic line breaking
+breakatwhitespace=false,        % sets if automatic breaks should only happen at whitespace
+                 % show the filename of files included with \lstinputlisting;
+                                % also try caption instead of title
+escapeinside={\%*}{*)},         % if you want to add a comment within your code
+morekeywords={*,...}            % if you want to add more keywords to the set
+}
+
+
+%opening
+\title{Seminar Report\\Rudy, a small web server}
+\author{Thomas FATTAL}
+\date{\today{}}
+
+\begin{document}
+
+\maketitle
+
+\section{Introduction}
+
+For the first seminar, we have implemented a Web Server in Erlang and we have realized some benchmark. Results from the benchmark are explained in this report.\\
+
+Web Servers are widely used to deliver web content to clients all around the world. For a few years, the number of connection have increased a lot. More and more devices are connected to Internet and web servers need to be more robust in order to handle concurrent requests. Distributed systems play an important role in this growth. \\
+
+In this report, I will deal with the necessity for a web server to be multi-threaded in order to be more efficient.
+
+\section{Main problems and solutions}
+
+The original source code given in the Rudy Project is mono-threaded. Indeed, only one process is launched for listening to TCP socket.\\
+When many requests reach the web server, they are put on hold into a queue that will be sequentially handled. 
+\begin{lstlisting}[language=erlang]
+{ok, Listen} ->
+	handler(Listen),	% One process
+	...
+\end{lstlisting}
+
+To improve the quality of service of our web server (especially response time), we need to have several processes that listen to client requests. \\
+
+It is recommended to create a TCP socket listener for each core of the running computer.
+As my computer has 4 cores, I added an Erlang function that spawns 4 processes. Each process listen to the TCP socket and can handle a client request.
+
+\begin{lstlisting}[language=erlang]
+spawn_many(0, Listen)-> ok;
+spawn_many(N, Listen)->
+    spawn(rudy,handler,[Listen]),
+    spawn_many(N - 1, Listen).
+    
+% Function call :
+spawn_many(4, Listen)
+\end{lstlisting}
+
+
+\section{Evaluation}
+
+In this section, we are going to realize some benchmark on the mono-threaded server and the multi-threaded server and see how the web server handles  requests.
+
+\subsection{Tools used for the benchmark}
+
+I'm going to use Apache Bench which is a tool for benchmarking HTTP server. Apache Bench shows how many requests per second the server is capable of serving. I can launch Apache Bench with the following command-line:
+\begin{lstlisting}[language=Bash]
+$ ab -n 100 localhost:8080/
+\end{lstlisting}
+Where:
+\begin{itemize}
+\item \textbf{ab}: Apache Bench program
+\item \textbf{-n 100}: The number of requests sent to the server (Here, we send 100 requests).
+\item \textbf{localhost:8080/} : My Erlang web server address on the port 8080.
+\end{itemize}
+
+\subsection{Benchmark in a mono-threaded server}
+
+Let's begin with some tests on the mono-threaded server to see how the server responds to our requests.
+
+
+
+\subsubsection{Without concurrency}
+
+Apache Bench is launched with the following command: 
+\begin{lstlisting}[language=Bash]
+$ ab -n 100 -g no_concurrency.dat localhost:8080/
+\end{lstlisting} 
+The figure \ref{no_concurrency} shows that the response time doesn't vary with time. 
+The average response time is 41.016 ms.
+
+\begin{figure}
+\includegraphics[scale=1.0]{no_concurrency.pdf}
+\centering
+\caption{Response Time per request - Without concurrency}
+\label{no_concurrency}
+\end{figure}
+
+Moreover, Apache Bench inform us that the number of requests handled per second is 24.38.
+
+\subsubsection{Response Time Delay}
+
+I added a time delay of 40 ms before the server replies, to simulate operations on server-side (for instance, access to a database).
+
+With the previous results, we can see that the parsing of the request takes about 1 ms.
+
+\subsubsection{With concurrency}
+Apache Bench allows to add concurrency access to the server.
+\begin{lstlisting}[language=Bash]
+$ ab -n 100 -c 4 -g with_concurrency.dat localhost:8080/
+\end{lstlisting} 
+With this command line, I suppose that there are 4 requests sent in the same time. Let's take a look at the result (Figure \ref{with_concurrency}).
+
+\begin{figure}
+\includegraphics[scale=1.0]{with_concurrency.pdf}
+\centering
+\caption{Response Time per request - With concurrency}
+\label{with_concurrency}
+\end{figure}
+
+Apache Bench groups the requests by four and send them in the same time to create concurrency requests.\\
+
+In fact, when the number of request is 4 (which matches with the number of concurrency clients that we put in the command-line), the time to answer is increased by four times (to reach 164.041 ms).\\
+
+We can deduce of this benchmark that if many clients request the server at the same time, the server will take more time to answer. Because there is just one process, the web server places the requests to handle into a queue. That's why the response time is more important.
+
+\subsection{Benchmark in a multi-threaded server}
+
+That's why it can be interesting to launch a multi-threaded server.\\
+
+The following test has been launched on the Erlang web server and there are 4 processes listening to the TCP socket (the number of cores of my computer). It means that each core listens to the TCP socket in real-time. When a request arrives, it is handled automatically by one of the 4 listeners.\\
+
+Let's see that with the following test:
+\begin{lstlisting}[language=Bash]
+$ ab -n 100 -c 4 -g multi_processes.dat localhost:8080/
+\end{lstlisting}
+
+\begin{figure}[H]
+\includegraphics[scale=1.0]{multi_processes.pdf}
+\centering
+\caption{Response Time per request - With concurrency - Multi-threaded (4 processes)}
+\label{multi_threaded}
+\end{figure}
+
+The figure \ref{multi_threaded} shows that the response time stays at 41 ms per request.
+
+
+\section{Conclusion}
+We created a web server in Erlang and we saw how concurrency is handled on mono-threaded server and multi-threaded server.\\
+
+We based on the creation of a process per core available. And we see that the response time is more efficient when there are concurrency requests (compared to the mono-thread test). We can deduce that adding processors cores will improve the response time when there are a lot of concurrent requests. 
+If the number of processes is insufficient to handle the number of clients, the requests will be put on hold into a queue (like the test on a mono-threaded server, with concurrency).\\
+
+To finish, it would be interesting to see how Erlang manages the requests and send them to the different processes that listen to the TCP socket.
+
+
+\end{document}
